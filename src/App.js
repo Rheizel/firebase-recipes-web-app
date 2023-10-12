@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, startTransition } from "react";
 import FirebaseAuthService from "./FirebaseAuthService";
 import LoginForm from "./components/LoginForm";
 import AddEditRecipeForm from "./components/AddEditRecipeForm";
@@ -9,9 +9,13 @@ import { db } from "./FirebaseConfig";
 
 function App() {
   const [user, setUser] = useState(null);
+  const [currentRecipe, setCurrentRecipe] = useState(null);
   const [recipes, setRecipes] = useState([]);
-
+  const [isLoading, setIsLoading] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState("");
   useEffect(() => {
+    setIsLoading(true);
+
     fetchRecipes()
       .then((fetchedRecipes) => {
         setRecipes(fetchedRecipes);
@@ -19,16 +23,41 @@ function App() {
       .catch((error) => {
         console.error(error.message);
         throw error;
+      })
+      .finally(() => {
+        setIsLoading(false);
       });
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, categoryFilter]);
 
   FirebaseAuthService.subscribeToAuthChanges(setUser);
 
   async function fetchRecipes() {
+    const queries = [];
+
+    if (categoryFilter) {
+      queries.push({
+        field: "category",
+        condition: "==",
+        value: categoryFilter,
+      });
+    }
+
+    if (!user) {
+      queries.push({
+        field: "isPublished",
+        condition: "==",
+        value: true,
+      });
+    }
+
     let fetchedRecipes = [];
 
     try {
-      await FirebaseFirestoreService.readDocuments("recipes");
+      FirebaseFirestoreService.readDocuments({
+        collection: "recipes",
+        queries: queries,
+      });
 
       const recipesRef = collection(db, "recipes");
       const querySnapshot = await getDocs(recipesRef);
@@ -45,7 +74,6 @@ function App() {
       });
     } catch (error) {
       console.error(error.message);
-      // throw error;
     }
     return fetchedRecipes;
   }
@@ -76,6 +104,85 @@ function App() {
     }
   }
 
+  async function handleUpdateRecipe(newRecipe, recipeId) {
+    try {
+      await FirebaseFirestoreService.updateDocument(
+        "recipes",
+        recipeId,
+        newRecipe
+      );
+      handleFetchRecipes();
+
+      alert(`successfully updated a recipe with an ID = ${recipeId}`);
+      setCurrentRecipe(null);
+    } catch (error) {
+      alert(error.message);
+      throw error;
+    }
+  }
+
+  async function handleDeleteRecipe(recipeId) {
+    const deleteConfirmation = window.confirm(
+      "Are you sure you want to delete this recipe? OK for Yes. Cancel for No."
+    );
+
+    if (deleteConfirmation) {
+      try {
+        await FirebaseFirestoreService.deleteDocument("recipes", recipeId);
+
+        handleFetchRecipes();
+
+        setCurrentRecipe(null);
+
+        window.scrollTo(0, 0);
+
+        alert(`successfully delete a recipe with an ID = ${recipeId}`);
+      } catch (error) {
+        alert(error.message);
+        throw error;
+      }
+    }
+  }
+
+  function handleEditRecipeClick(recipeId) {
+    const selectedRecipe = recipes.find((recipe) => {
+      return recipe.id === recipeId;
+    });
+
+    if (selectedRecipe) {
+      startTransition(() => {
+        setCurrentRecipe(selectedRecipe);
+      });
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  }
+
+  function handleEditRecipeCancel() {
+    setCurrentRecipe(null);
+  }
+
+  function LookupCategoryLabel(categoryKey) {
+    const categories = {
+      breadSandwichesAndPizza: "Breads, Sandwiches, and Pizza",
+      eggsAndBreakfast: "Eggs & Breakfast",
+      dessertsAndBakedGoods: "Desserts & Baked Goods",
+      fishAndSeafood: "Fish & Seafood",
+      vegetables: "Vegetable",
+    };
+    const label = categories[categoryKey];
+
+    return label;
+  }
+
+  function formatDate(date) {
+    const day = date.getUTCDate();
+    const month = date.getUTCMonth() + 1;
+    const year = date.getFullYear();
+    const dateString = `${day}-${month}-${year}`;
+
+    return dateString;
+  }
+
   return (
     <div className="App">
       <div className="title-row">
@@ -83,19 +190,67 @@ function App() {
         <LoginForm existingUser={user}></LoginForm>
       </div>
       <div className="main">
+        <div className="row filters">
+          <label className="recipe-label input-label">
+            Category:
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="select"
+              required
+            >
+              <option value=""></option>
+              <option value="breadSandwichesAndPizza">
+                Breads, Sandwiches, and Pizza
+              </option>
+              <option value="eggsAndBreakfast">Eggs & Breakfast</option>
+              <option value="dessertsAndBakedGoods">
+                Desserts & Baked Goods
+              </option>
+              <option value="fishAndSeafood">Fish & Seafood</option>
+              <option value="vegetables">Vegetable</option>
+            </select>
+          </label>
+        </div>
         <div className="center">
           <div className="recipe-list-box">
-            {recipes && recipes.length > 0 ? (
+            {isLoading ? (
+              <div className="fire">
+                <div className="flames">
+                  <div className="flame"></div>
+                  <div className="flame"></div>
+                  <div className="flame"></div>
+                  <div className="flame"></div>
+                </div>
+                <div className="logs"></div>
+              </div>
+            ) : null}
+            {!isLoading && recipes && recipes.length === 0 ? (
+              <h5 className="no-recipes">No Recipes Found</h5>
+            ) : null}
+            {!isLoading && recipes && recipes.length > 0 ? (
               <div className="recipe-list">
                 {recipes.map((recipe) => (
                   <div className="recipe-card" key={recipe.id}>
+                    {recipe.isPublished === false ? (
+                      <div className="unpublished">UNPUBLISHED</div>
+                    ) : null}
                     <div className="recipe-name">{recipe.name}</div>
                     <div className="recipe-field">
-                      Category: {recipe.category}
+                      Category: {LookupCategoryLabel(recipe.category)}
                     </div>
                     <div className="recipe-field">
-                      Publish Date: {recipe.publishDate.toString()}
+                      Publish Date: {formatDate(recipe.publishDate)}
                     </div>
+                    {user ? (
+                      <button
+                        type="button"
+                        onClick={() => handleEditRecipeClick(recipe.id)}
+                        className="primary-button edit-button"
+                      >
+                        EDIT
+                      </button>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -104,7 +259,11 @@ function App() {
         </div>
         {user ? (
           <AddEditRecipeForm
+            existingRecipe={currentRecipe}
             handleAddRecipe={handleAddRecipe}
+            handleUpdateRecipe={handleUpdateRecipe}
+            handleDeleteRecipe={handleDeleteRecipe}
+            handleEditRecipeCancel={handleEditRecipeCancel}
           ></AddEditRecipeForm>
         ) : null}
       </div>
